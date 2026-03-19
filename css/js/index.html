@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>木蘭詩體裁探究偵探 - 主頁</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- 登入畫面 -->
+        <div id="login-section">
+            <h1 class="game-title">🕵️ 木蘭詩體裁探究偵探</h1>
+            <p class="game-subtitle">解開樂府詩的五大秘密，成為鑑賞大師！</p>
+            
+            <div class="hint-box">
+                <strong>📜 遊戲規則：</strong><br>
+                • 共有5個島嶼，每島3道題目<br>
+                • 必須<strong>答對2題（過半數）</strong>才能進入下一島<br>
+                • 錯誤過半需重新挑戰該島所有題目<br>
+                • 可在排行榜查看全班排名
+            </div>
+            
+            <div style="max-width: 300px; margin: 30px auto;">
+                <input type="text" id="player-name" class="input-field" placeholder="輸入你的姓名" maxlength="10">
+                <input type="text" id="player-class" class="input-field" placeholder="班別（如：1A）" maxlength="5">
+                
+                <button class="btn btn-primary" onclick="startGame()" style="width: 100%; margin-top: 15px;">
+                    🚀 開始偵探之旅
+                </button>
+                <button class="btn btn-secondary" onclick="continueGame()" style="width: 100%;">
+                    📂 繼續上回進度
+                </button>
+            </div>
+        </div>
+        
+        <!-- 地圖畫面（登入後顯示） -->
+        <div id="map-section" style="display: none;">
+            <div class="nav-bar">
+                <div class="nav-title">🗺️ 偵探地圖</div>
+                <div>
+                    <span id="player-display"></span> | 
+                    <a href="leaderboard.html" class="btn btn-secondary" style="padding: 8px 15px; font-size: 0.9em;">🏅 排行榜</a>
+                </div>
+            </div>
+            
+            <div class="player-stats" style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 10px; margin-bottom: 20px; text-align: center;">
+                <div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
+                    <div>
+                        <div style="font-size: 0.8em; opacity: 0.8;">總積分</div>
+                        <div id="total-score" style="font-size: 1.5em; font-weight: bold;">0</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; opacity: 0.8;">印章</div>
+                        <div id="stamp-count" style="font-size: 1.5em; font-weight: bold;">0/5</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8em; opacity: 0.8;">完成度</div>
+                        <div id="progress-percent" style="font-size: 1.5em; font-weight: bold;">0%</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="island-grid" id="islands-container">
+                <!-- 島嶼卡片由 JS 生成 -->
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px;">
+                <a href="leaderboard.html" class="btn btn-secondary">🏅 查看排行榜</a>
+                <button class="btn btn-secondary" onclick="logout()">🔄 重新開始</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 檢查是否已登入
+        function checkLogin() {
+            const player = localStorage.getItem('mulanPlayer');
+            if (player) {
+                showMap();
+            }
+        }
+        
+        function startGame() {
+            const name = document.getElementById('player-name').value.trim();
+            const cls = document.getElementById('player-class').value.trim();
+            
+            if (!name || !cls) {
+                alert('請輸入姓名和班別！');
+                return;
+            }
+            
+            // 生成唯一ID
+            const playerData = {
+                id: `${cls}_${name}_${Date.now().toString().slice(-4)}`,
+                name: name,
+                class: cls,
+                score: 0,
+                stamps: [false, false, false, false, false],
+                islandAttempts: [0, 0, 0, 0, 0],
+                currentIsland: 0,
+                timestamp: Date.now()
+            };
+            
+            localStorage.setItem('mulanPlayer', JSON.stringify(playerData));
+            
+            // 同步到 Firebase
+            savePlayerData(playerData);
+            
+            showMap();
+        }
+        
+        function continueGame() {
+            const player = localStorage.getItem('mulanPlayer');
+            if (!player) {
+                alert('沒有儲存的進度！');
+                return;
+            }
+            showMap();
+        }
+        
+        function showMap() {
+            document.getElementById('login-section').style.display = 'none';
+            document.getElementById('map-section').style.display = 'block';
+            
+            const player = JSON.parse(localStorage.getItem('mulanPlayer'));
+            document.getElementById('player-display').textContent = `${player.name} (${player.class})`;
+            
+            updateMapDisplay();
+            
+            // 定期同步
+            setInterval(() => {
+                const p = JSON.parse(localStorage.getItem('mulanPlayer'));
+                savePlayerData(p);
+            }, 30000);
+        }
+        
+        function updateMapDisplay() {
+            const player = JSON.parse(localStorage.getItem('mulanPlayer'));
+            const stamps = player.stamps || [false, false, false, false, false];
+            const attempts = player.islandAttempts || [0, 0, 0, 0, 0];
+            
+            document.getElementById('total-score').textContent = player.score || 0;
+            document.getElementById('stamp-count').textContent = `${stamps.filter(s => s).length}/5`;
+            document.getElementById('progress-percent').textContent = `${Math.round(stamps.filter(s => s).length / 5 * 100)}%`;
+            
+            const islandsData = [
+                { name: '韻律島', icon: '🎵', desc: '押韻與換韻', file: 'island-1.html' },
+                { name: '復沓島', icon: '🔄', desc: '疊句與音樂性', file: 'island-2.html' },
+                { name: '互文島', icon: '🔀', desc: '鋪陳與互文', file: 'island-3.html' },
+                { name: '詳略島', icon: '⚖️', desc: '敘事剪裁', file: 'island-4.html' },
+                { name: '對偶島', icon: '⚡', desc: '對仗與形式美', file: 'island-5.html' }
+            ];
+            
+            const container = document.getElementById('islands-container');
+            container.innerHTML = '';
+            
+            islandsData.forEach((island, index) => {
+                const isLocked = index > 0 && !stamps[index - 1];
+                const isCompleted = stamps[index];
+                const isFailed = attempts[index] > 0 && !stamps[index] && !isLocked;
+                
+                const card = document.createElement('div');
+                card.className = `island-card ${isLocked ? 'locked' : ''} ${isCompleted ? 'completed' : ''} ${isFailed ? 'failed' : ''}`;
+                
+                let statusText = '';
+                if (isLocked) statusText = '🔒 需先完成前一島';
+                else if (isCompleted) statusText = '✅ 已完成';
+                else if (isFailed) statusText = `💪 重試第${attempts[index]}次`;
+                else statusText = '🎯 可挑戰';
+                
+                card.innerHTML = `
+                    <div class="island-icon">${island.icon}</div>
+                    <div class="island-name">${island.name}</div>
+                    <div class="island-status">${statusText}</div>
+                    ${isCompleted ? `<div class="stamp">${island.icon}</div>` : ''}
+                `;
+                
+                if (!isLocked) {
+                    card.onclick = () => window.location.href = island.file;
+                }
+                
+                container.appendChild(card);
+            });
+            
+            // Boss 關
+            const allCompleted = stamps.every(s => s);
+            const bossCard = document.createElement('div');
+            bossCard.className = `island-card ${allCompleted ? '' : 'locked'}`;
+            bossCard.style.gridColumn = '1 / -1';
+            bossCard.innerHTML = `
+                <div class="island-icon">👑</div>
+                <div class="island-name">最終Boss</div>
+                <div class="island-status">${allCompleted ? '🏆 挑戰鑑賞大師' : '🔒 需集滿5個印章'}</div>
+            `;
+            if (allCompleted) {
+                bossCard.onclick = () => window.location.href = 'boss.html';
+            }
+            container.appendChild(bossCard);
+        }
+        
+        function logout() {
+            if (confirm('確定要重新開始？所有進度將清除！')) {
+                localStorage.removeItem('mulanPlayer');
+                location.reload();
+            }
+        }
+        
+        // 頁面載入時檢查
+        checkLogin();
+    </script>
+</body>
+</html>
