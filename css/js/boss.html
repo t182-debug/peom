@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>最終Boss - 樂府詩鑑賞大師 | 木蘭詩偵探</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+    <style>
+        /* Boss專屬樣式 */
+        .boss-header {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 30px;
+            border-radius: 20px;
+            text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 40px rgba(240, 147, 251, 0.3);
+            animation: bossPulse 3s infinite;
+        }
+        
+        @keyframes bossPulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 10px 40px rgba(240, 147, 251, 0.3); }
+            50% { transform: scale(1.02); box-shadow: 0 15px 50px rgba(240, 147, 251, 0.5); }
+        }
+        
+        .boss-icon {
+            font-size: 5em;
+            margin-bottom: 15px;
+        }
+        
+        .boss-title {
+            font-size: 2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .boss-subtitle {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        
+        .challenge-badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 8px 20px;
+            border-radius: 20px;
+            margin-top: 15px;
+            font-size: 0.9em;
+        }
+        
+        .final-question {
+            background: linear-gradient(135deg, rgba(240, 147, 251, 0.2), rgba(245, 87, 108, 0.2));
+            border: 2px solid rgba(240, 147, 251, 0.5);
+        }
+        
+        .victory-screen {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+        }
+        
+        .victory-icon {
+            font-size: 6em;
+            margin-bottom: 20px;
+            animation: trophyBounce 1s ease infinite;
+        }
+        
+        @keyframes trophyBounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-20px); }
+        }
+        
+        .certificate {
+            background: white;
+            color: #333;
+            padding: 30px;
+            border-radius: 15px;
+            margin: 20px 0;
+            text-align: left;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+        }
+        
+        .certificate h3 {
+            text-align: center;
+            color: #764ba2;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+        
+        .certificate-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px dashed #ccc;
+        }
+        
+        .certificate-row:last-child {
+            border-bottom: none;
+        }
+        
+        .seal {
+            width: 80px;
+            height: 80px;
+            background: #f45c43;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            margin: 20px auto;
+            transform: rotate(-15deg);
+            border: 3px solid #ffd700;
+        }
+        
+        .skill-badges {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin: 20px 0;
+        }
+        
+        .skill-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Boss標題區 -->
+        <div class="boss-header" id="boss-header">
+            <div class="boss-icon">👑</div>
+            <div class="boss-title">樂府詩鑑賞大師</div>
+            <div class="boss-subtitle">最終挑戰 - 證明你已掌握所有技巧</div>
+            <div class="challenge-badge">⚡ 3題綜合挑戰 | 需答對2題過關 ⚡</div>
+        </div>
+        
+        <!-- 題目區域 -->
+        <div id="question-container">
+            <!-- 動態載入 -->
+        </div>
+        
+        <!-- 勝利畫面 -->
+        <div id="victory-screen" style="display: none;">
+            <div class="victory-screen">
+                <div class="victory-icon">🏆</div>
+                <h2>恭喜成為樂府詩鑑賞大師！</h2>
+                <p style="margin: 15px 0; font-size: 1.1em;">你已通過所有考驗，完成《木蘭詩》體裁探究之旅！</p>
+                
+                <div class="skill-badges">
+                    <span class="skill-badge">🎵 韻律掌握</span>
+                    <span class="skill-badge">🔄 復沓運用</span>
+                    <span class="skill-badge">🔀 互文理解</span>
+                    <span class="skill-badge">⚖️ 詳略分析</span>
+                    <span class="skill-badge">⚡ 對偶創作</span>
+                </div>
+                
+                <div class="certificate">
+                    <h3>🎓 鑑賞大師證書</h3>
+                    <div class="certificate-row">
+                        <span>姓名</span>
+                        <strong id="cert-name">-</strong>
+                    </div>
+                    <div class="certificate-row">
+                        <span>班別</span>
+                        <strong id="cert-class">-</strong>
+                    </div>
+                    <div class="certificate-row">
+                        <span>最終積分</span>
+                        <strong id="cert-score">0</strong>
+                    </div>
+                    <div class="certificate-row">
+                        <span>完成時間</span>
+                        <strong id="cert-date">-</strong>
+                    </div>
+                    <div class="seal">鑑賞<br>大師</div>
+                </div>
+                
+                <div style="margin-top: 30px;">
+                    <a href="leaderboard.html" class="btn btn-primary" style="background: white; color: #11998e;">🏅 查看最終排名</a>
+                    <a href="index.html" class="btn btn-secondary">🗺️ 返回地圖</a>
+                    <button class="btn btn-secondary" onclick="shareResult()">📤 分享成就</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 失敗畫面 -->
+        <div id="fail-screen" style="display: none;">
+            <div class="result-box" style="background: rgba(235, 51, 73, 0.2); border: 2px solid #f45c43; border-radius: 15px; padding: 40px;">
+                <div class="result-icon">💪</div>
+                <div class="result-title" style="color: #f45c43;">挑戰失敗</div>
+                <div class="result-stats" id="fail-stats" style="margin: 20px 0;"></div>
+                <p style="margin: 20px 0; line-height: 1.8;">
+                    別氣餒！Boss挑戰需要熟練掌握所有技巧。<br>
+                    建議回顧各島嶼的學習內容，再次挑戰！
+                </p>
+                <div>
+                    <button class="btn btn-warning" onclick="retryBoss()">🔄 再次挑戰</button>
+                    <a href="index.html" class="btn btn-secondary">🗺️ 返回地圖複習</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ==================== Boss關卡設定 ====================
+        const bossQuestions = [
+            {
+                type: 'choice',
+                title: '綜合挑戰 1/3',
+                question: '以下哪項最能概括《木蘭詩》的體裁特點？',
+                options: [
+                    { text: 'A. 格律嚴謹的七言律詩', correct: false },
+                    { text: 'B. 句式自由、敘事性強的樂府民歌', correct: true },
+                    { text: 'C. 豪放派的宋詞', correct: false },
+                    { text: 'D. 婉約派的元曲', correct: false }
+                ],
+                explanation: '《木蘭詩》是北朝樂府民歌，句式自由，敘事性強，與格律嚴謹的近體詩不同。'
+            },
+            {
+                type: 'choice',
+                title: '綜合挑戰 2/3',
+                question: '《木蘭詩》中同時運用多種手法，以下哪組組合正確？',
+                options: [
+                    { text: 'A. 復沓+互文+對偶+詳略得當', correct: true
