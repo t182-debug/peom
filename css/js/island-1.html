@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>韻律島 - 木蘭詩偵探</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="nav-bar">
+            <a href="index.html" class="btn btn-secondary" style="padding: 8px 15px;">← 返回地圖</a>
+            <div class="nav-title">🎵 韻律島（第1/5島）</div>
+            <div id="score-display">積分：0</div>
+        </div>
+        
+        <div class="hint-box">
+            本島共3題，需答對<strong>至少2題</strong>才能過關進入下一島。
+            <span id="attempt-info" style="float: right;"></span>
+        </div>
+        
+        <!-- 題目區域 -->
+        <div id="question-container">
+            <!-- 動態載入 -->
+        </div>
+        
+        <!-- 結果區域 -->
+        <div id="result-container" style="display: none;">
+            <div class="result-box">
+                <div class="result-icon" id="result-icon">🏆</div>
+                <div class="result-title" id="result-title">挑戰完成！</div>
+                <div class="result-stats" id="result-stats"></div>
+                <div id="result-buttons"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ==================== 島嶼設定 ====================
+        const islandIndex = 0; // 0=韻律島, 1=復沓島, 2=互文島, 3=詳略島, 4=對偶島
+        const islandName = '韻律島';
+        const islandIcon = '🎵';
+        
+        const questions = [
+            {
+                type: 'choice',
+                title: '聽音辨韻',
+                question: '《木蘭詩》開頭「唧唧復唧唧，木蘭當戶織」中，「唧」和「織」屬於什麼關係？',
+                poem: '唧唧復唧唧，木蘭當戶織。',
+                options: [
+                    { text: 'A. 對偶關係', correct: false },
+                    { text: 'B. 押韻關係（韻腳）', correct: true },
+                    { text: 'C. 對比關係', correct: false },
+                    { text: 'D. 沒有特殊關係', correct: false }
+                ],
+                explanation: '「唧」與「織」在古音中韻母相近，形成押韻，這是樂府詩的特點。'
+            },
+            {
+                type: 'choice',
+                title: '換韻自由',
+                question: '樂府詩與近體詩（唐詩）在押韻上的主要區別是？',
+                options: [
+                    { text: 'A. 樂府詩必須一韻到底', correct: false },
+                    { text: 'B. 近體詩可以隨意換韻', correct: false },
+                    { text: 'C. 樂府詩可以換韻，近體詩一般不能', correct: true },
+                    { text: 'D. 兩者都必須押平聲韻', correct: false }
+                ],
+                explanation: '樂府詩作為古體詩，句式自由、可換韻；近體詩（律詩、絕句）則有嚴格格律。'
+            },
+            {
+                type: 'creative',
+                title: '創作挑戰',
+                question: '請用「ang韻」（如：光、香、方、長）仿寫一句樂府風格的句子，描述木蘭準備出征的心情。',
+                hint: '提示：可參考「萬里赴戎機，關山度若飛」的節奏，五言或七言均可。',
+                placeholder: '例如：身披戰甲光，心懷報國方...',
+                checkKeywords: ['光', '香', '方', '長', '鄉', '堂', '郎', '裝'],
+                minLength: 5,
+                explanation: '樂府詩語言質樸自然，押韻寬鬆，重在表達真情實感。'
+            }
+        ];
+        
+        // ==================== 遊戲狀態 ====================
+        let player = null;
+        let currentQuestion = 0;
+        let correctCount = 0;
+        let totalScore = 0;
+        let answers = []; // 記錄每題答案
+        
+        // ==================== 初始化 ====================
+        function init() {
+            // 檢查登入
+            const playerData = localStorage.getItem('mulanPlayer');
+            if (!playerData) {
+                alert('請先登入！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            player = JSON.parse(playerData);
+            
+            // 檢查是否已過關
+            if (player.stamps[islandIndex]) {
+                alert('你已經完成這個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            // 檢查前一島是否完成（第一島除外）
+            if (islandIndex > 0 && !player.stamps[islandIndex - 1]) {
+                alert('請先完成前一個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            // 增加嘗試次數
+            player.islandAttempts[islandIndex] = (player.islandAttempts[islandIndex] || 0) + 1;
+            savePlayer();
+            
+            // 更新顯示
+            document.getElementById('score-display').textContent = `積分：${player.score || 0}`;
+            document.getElementById('attempt-info').textContent = `第 ${player.islandAttempts[islandIndex]} 次嘗試`;
+            
+            // 顯示第一題
+            showQuestion(0);
+        }
+        
+        function savePlayer() {
+            localStorage.setItem('mulanPlayer', JSON.stringify(player));
+        }
+        
+        // ==================== 顯示題目 ====================
+        function showQuestion(index) {
+            const q = questions[index];
+            const container = document.getElementById('question-container');
+            
+            let html = `
+                <div class="question-box">
+                    <div class="question-number">題目 ${index + 1} / ${questions.length}</div>
+                    <h3>${q.title}</h3>
+                    <div class="question-text">${q.question}</div>
+            `;
+            
+            if (q.poem) {
+                html += `<div class="poem-text">${q.poem.replace(/\n/g, '<br>')}</div>`;
+            }
+            
+            if (q.type === 'choice') {
+                html += '<div class="options">';
+                q.options.forEach((opt, i) => {
+                    html += `<div class="option" onclick="checkAnswer(${i})" id="opt-${i}">${opt.text}</div>`;
+                });
+                html += '</div>';
+            } else if (q.type === 'creative') {
+                html += `
+                    <div class="hint-box">${q.hint}</div>
+                    <textarea class="input-field textarea-field" id="creative-answer" placeholder="${q.placeholder}"></textarea>
+                    <button class="btn btn-primary" onclick="checkCreative()" style="width: 100%; margin-top: 15px;">提交答案</button>
+                `;
+            }
+            
+            html += '</div>';
+            container.innerHTML = html;
+        }
+        
+        // ==================== 檢查答案 ====================
+        function checkAnswer(selectedIndex) {
+            const q = questions[currentQuestion];
+            const isCorrect = q.options[selectedIndex].correct;
+            
+            // 顯示正確/錯誤
+            document.querySelectorAll('.option').forEach((el, i) => {
+                el.classList.add('disabled');
+                if (q.options[i].correct) el.classList.add('correct');
+                else if (i === selectedIndex) el.classList.add('wrong');
+            });
+            
+            // 記錄
+            answers.push({
+                question: q.title,
+                answer: q.options[selectedIndex].text,
+                isCorrect: isCorrect
+            });
+            
+            // 同步到 Firebase
+            recordAnswer(islandIndex, currentQuestion, q.question, q.options[selectedIndex].text, isCorrect, isCorrect ? 100 : 0);
+            
+            if (isCorrect) {
+                correctCount++;
+                totalScore += 100;
+            }
+            
+            // 延遲下一題
+            setTimeout(() => {
+                currentQuestion++;
+                if (currentQuestion < questions.length) {
+                    showQuestion(currentQuestion);
+                } else {
+                    finishIsland();
+                }
+            }, 1500);
+        }
+        
+        function checkCreative() {
+            const answer = document.getElementById('creative-answer').value.trim();
+            const q = questions[currentQuestion];
+            
+            if (answer.length < q.minLength) {
+                alert(`請至少輸入${q.minLength}個字！`);
+                return;
+            }
+            
+            const hasKeyword = q.checkKeywords.some(kw => answer.includes(kw));
+            const isValid = hasKeyword && answer.length > q.minLength;
+            
+            // 記錄
+            answers.push({
+                question: q.title,
+                answer: answer,
+                isCorrect: isValid
+            });
+            
+            recordAnswer(islandIndex, currentQuestion, q.question, answer, isValid, isValid ? 100 : 50);
+            
+            if (isValid) {
+                correctCount++;
+                totalScore += 100;
+            } else {
+                totalScore += 50; // 創作題部分給分
+            }
+            
+            currentQuestion++;
+            if (currentQuestion < questions.length) {
+                showQuestion(currentQuestion);
+            } else {
+                finishIsland();
+            }
+        }
+        
+        // ==================== 完成島嶼 ====================
+        function finishIsland() {
+            const required = Math.ceil(questions.length / 2); // 2題
+            const isPass = correctCount >= required;
+            
+            // 更新玩家資料
+            if (isPass) {
+                player.stamps[islandIndex] = true;
+                player.score = (player.score || 0) + totalScore;
+            }
+            savePlayer();
+            
+            // 同步到 Firebase
+            const playerData = {
+                name: player.name,
+                class: player.class,
+                score: player.score,
+                stamps: player.stamps,
+                islandAttempts: player.islandAttempts,
+                lastUpdate: firebase.database.ServerValue.TIMESTAMP
+            };
+            savePlayerData(playerData);
+            
+            // 顯示結果
+            showResult(isPass, required);
+        }
+        
+        function showResult(isPass, required) {
+            document.getElementById('question-container').style.display = 'none';
+            document.getElementById('result-container').style.display = 'block';
+            
+            const icon = document.getElementById('result-icon');
+            const title = document.getElementById('result-title');
+            const stats = document.getElementById('result-stats');
+            const buttons = document.getElementById('result-buttons');
+            
+            if (isPass) {
+                icon.textContent = '🏆';
+                title.textContent = `${islandName} 挑戰成功！`;
+                title.style.color = '#38ef7d';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>獲得積分</span><span>+${totalScore}</span></div>
+                    <div class="stat-row"><span>獲得印章</span><span>${islandIcon}</span></div>
+                `;
+                
+                let nextButton = '';
+                if (islandIndex < 4) {
+                    nextButton = `<a href="island-${islandIndex + 2}.html" class="btn btn-primary">前往下一島 →</a>`;
+                } else {
+                    nextButton = `<a href="boss.html" class="btn btn-primary">挑戰最終Boss 👑</a>`;
+                }
+                
+                buttons.innerHTML = `
+                    ${nextButton}
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                    <a href="leaderboard.html" class="btn btn-secondary">查看排行榜</a>
+                `;
+            } else {
+                icon.textContent = '💪';
+                title.textContent = `${islandName} 挑戰失敗`;
+                title.style.color = '#f45c43';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>目前嘗試</span><span>第 ${player.islandAttempts[islandIndex]} 次</span></div>
+                `;
+                
+                buttons.innerHTML = `
+                    <button class="btn btn-warning" onclick="retry()">🔄 重新挑戰</button>
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                `;
+            }
+        }
+        
+        function retry() {
+            // 重置並重新載入頁面
+            currentQuestion = 0;
+            correctCount = 0;
+            totalScore = 0;
+            answers = [];
+            location.reload();
+        }
+        
+        // 啟動
+        init();
+    </script>
+</body>
+</html>
