@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>排行榜 - 木蘭詩偵探</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="nav-bar">
+            <a href="index.html" class="btn btn-secondary" style="padding: 8px 15px;">← 返回地圖</a>
+            <div class="nav-title">🏅 偵探金榜</div>
+            <div id="online-count">載入中...</div>
+        </div>
+        
+        <div class="hint-box" style="text-align: center;">
+            即時更新 | 按總積分排名 | 完成度相同時按完成時間排序
+        </div>
+        
+        <div id="leaderboard-list" style="margin: 20px 0;">
+            <!-- 動態填入 -->
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <button class="btn btn-secondary" onclick="refresh()">🔄 重新整理</button>
+            <a href="index.html" class="btn btn-primary">返回遊戲</a>
+        </div>
+    </div>
+    
+    <script>
+        function loadLeaderboard() {
+            database.ref('students').on('value', (snapshot) => {
+                const students = snapshot.val() || {};
+                renderLeaderboard(students);
+            });
+        }
+        
+        function renderLeaderboard(students) {
+            // 轉換為陣列並排序
+            const list = Object.entries(students).map(([id, data]) => ({
+                id, ...data,
+                stampCount: (data.stamps || []).filter(s => s).length
+            }));
+            
+            // 排序：積分高到低，再按印章數，再按時間
+            list.sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                if (b.stampCount !== a.stampCount) return b.stampCount - a.stampCount;
+                return (b.lastUpdate || 0) - (a.lastUpdate || 0);
+            });
+            
+            // 統計在線（30秒內更新）
+            const now = Date.now();
+            const onlineCount = list.filter(s => now - (s.lastUpdate || 0) < 60000).length;
+            document.getElementById('online-count').textContent = `在線：${onlineCount}人`;
+            
+            // 渲染
+            const container = document.getElementById('leaderboard-list');
+            const myId = getStudentId();
+            
+            let html = '';
+            list.slice(0, 20).forEach((s, index) => {
+                const isMe = s.id === myId;
+                const rankClass = index === 0 ? 'top1' : index === 1 ? 'top2' : index === 2 ? 'top3' : '';
+                const selfClass = isMe ? 'self' : '';
+                
+                html += `
+                    <div class="leaderboard-item ${rankClass} ${selfClass}">
+                        <div class="leaderboard-rank ${rankClass}">${index + 1}</div>
+                        <div class="leaderboard-info">
+                            <div class="leaderboard-name">
+                                ${s.name} ${isMe ? '(你)' : ''}
+                                ${now - (s.lastUpdate || 0) < 60000 ? '<span class="live-indicator"></span>' : ''}
+                            </div>
+                            <div class="leaderboard-class">${s.class} | 完成 ${s.stampCount}/5 島</div>
+                        </div>
+                        <div class="leaderboard-score">${s.score || 0}分</div>
+                    </div>
+                `;
+            });
+            
+            if (list.length === 0) {
+                html = '<p style="text-align: center; opacity: 0.7; padding: 40px;">暫無資料，快成為第一位偵探吧！</p>';
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function refresh() {
+            database.ref('students').once('value').then((snapshot) => {
+                renderLeaderboard(snapshot.val() || {});
+            });
+        }
+        
+        // 載入
+        loadLeaderboard();
+    </script>
+</body>
+</html>
