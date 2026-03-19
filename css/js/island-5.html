@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>對偶島 - 木蘭詩偵探</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="nav-bar">
+            <a href="index.html" class="btn btn-secondary" style="padding: 8px 15px;">← 返回地圖</a>
+            <div class="nav-title">⚡ 對偶島（第5/5島）</div>
+            <div id="score-display">積分：0</div>
+        </div>
+        
+        <div class="hint-box">
+            本島共3題，需答對<strong>至少2題</strong>才能過關，解鎖最終Boss！
+            <span id="attempt-info" style="float: right;"></span>
+        </div>
+        
+        <!-- 題目區域 -->
+        <div id="question-container">
+            <!-- 動態載入 -->
+        </div>
+        
+        <!-- 結果區域 -->
+        <div id="result-container" style="display: none;">
+            <div class="result-box">
+                <div class="result-icon" id="result-icon">🏆</div>
+                <div class="result-title" id="result-title">挑戰完成！</div>
+                <div class="result-stats" id="result-stats"></div>
+                <div id="result-buttons"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ==================== 島嶼設定 ====================
+        const islandIndex = 4; // 4=對偶島
+        const islandName = '對偶島';
+        const islandIcon = '⚡';
+        
+        const questions = [
+            {
+                type: 'matching',
+                title: '對偶配對',
+                instruction: '請配對《木蘭詩》中的對偶句（限時60秒）：',
+                pairs: [
+                    { left: '朔氣傳金柝', right: '寒光照鐵衣' },
+                    { left: '萬里赴戎機', right: '關山度若飛' },
+                    { left: '將軍百戰死', right: '壯士十年歸' },
+                    { left: '當戶理紅妝', right: '磨刀霍霍向豬羊' }
+                ],
+                timeLimit: 60,
+                score: 100
+            },
+            {
+                type: 'choice',
+                title: '對偶分析',
+                question: '「朔氣傳金柝，寒光照鐵衣」中，「朔氣」對「寒光」屬於什麼對法？',
+                options: [
+                    { text: 'A. 動詞對動詞', correct: false },
+                    { text: 'B. 名詞對名詞（偏正結構）', correct: true },
+                    { text: 'C. 形容詞對形容詞', correct: false },
+                    { text: 'D. 不是對偶', correct: false }
+                ],
+                explanation: '「朔（北方）氣」對「寒（寒冷）光」，皆為偏正名詞短語，詞性相對。'
+            },
+            {
+                type: 'creative',
+                title: '對偶創作',
+                question: '請為「木蘭歸家」場景創作一組對偶句。',
+                hint: '提示：上句寫家人動作，下句寫木蘭反應，注意詞性相對。',
+                placeholder: '例如：爺孃開笑顏，木蘭整舊裳...',
+                checkKeywords: ['，', '。', '對', '來', '去', '開', '整', '理'],
+                minLength: 10,
+                explanation: '對偶讓句式整齊，音韻和諧，增強表達效果。'
+            }
+        ];
+        
+        // ==================== 遊戲狀態 ====================
+        let player = null;
+        let currentQuestion = 0;
+        let correctCount = 0;
+        let totalScore = 0;
+        let answers = [];
+        let selectedItem = null;
+        let matchedPairs = [];
+        
+        // ==================== 初始化 ====================
+        function init() {
+            const playerData = localStorage.getItem('mulanPlayer');
+            if (!playerData) {
+                alert('請先登入！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            player = JSON.parse(playerData);
+            
+            if (player.stamps[islandIndex]) {
+                alert('你已經完成這個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            if (islandIndex > 0 && !player.stamps[islandIndex - 1]) {
+                alert('請先完成前一個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            player.islandAttempts[islandIndex] = (player.islandAttempts[islandIndex] || 0) + 1;
+            savePlayer();
+            
+            document.getElementById('score-display').textContent = `積分：${player.score || 0}`;
+            document.getElementById('attempt-info').textContent = `第 ${player.islandAttempts[islandIndex]} 次嘗試`;
+            
+            showQuestion(0);
+        }
+        
+        function savePlayer() {
+            localStorage.setItem('mulanPlayer', JSON.stringify(player));
+        }
+        
+        // ==================== 顯示題目 ====================
+        function showQuestion(index) {
+            const q = questions[index];
+            const container = document.getElementById('question-container');
+            
+            let html = `
+                <div class="question-box">
+                    <div class="question-number">題目 ${index + 1} / ${questions.length}</div>
+                    <h3>${q.title}</h3>
+                    <div class="question-text">${q.question}</div>
+            `;
+            
+            if (q.type === 'matching') {
+                html += `<p style="margin: 15px 0;">${q.instruction}</p>`;
+                html += '<div class="matching-container" id="matching-game">';
+                
+                const items = [];
+                q.pairs.forEach((pair, idx) => {
+                    items.push({ text: pair.left, type: 'left', pairId: idx });
+                    items.push({ text: pair.right, type: 'right', pairId: idx });
+                });
+                items.sort(() => Math.random() - 0.5);
+                
+                items.forEach(item => {
+                    html += `<div class="matching-item" data-pair-id="${item.pairId}" data-type="${item.type}" onclick="handleMatching(this)">${item.text}</div>`;
+                });
+                
+                html += '</div>';
+                
+                if (q.timeLimit) {
+                    html += `<div id="matching-timer" style="text-align: center; margin-top: 15px; font-size: 1.2em;">剩餘時間：${q.timeLimit}秒</div>`;
+                    
+                    let timeLeft = q.timeLimit;
+                    window.matchingInterval = setInterval(() => {
+                        timeLeft--;
+                        const timerEl = document.getElementById('matching-timer');
+                        if (timerEl) timerEl.textContent = `剩餘時間：${timeLeft}秒`;
+                        
+                        if (timeLeft <= 0 || matchedPairs.length === q.pairs.length) {
+                            clearInterval(window.matchingInterval);
+                            if (matchedPairs.length < q.pairs.length) {
+                                endMatching(false);
+                            }
+                        }
+                    }, 1000);
+                }
+            } else if (q.type === 'choice') {
+                html += '<div class="options">';
+                q.options.forEach((opt, i) => {
+                    html += `<div class="option" onclick="checkAnswer(${i})" id="opt-${i}">${opt.text}</div>`;
+                });
+                html += '</div>';
+            } else if (q.type === 'creative') {
+                html += `
+                    <div class="hint-box">${q.hint}</div>
+                    <textarea class="input-field textarea-field" id="creative-answer" placeholder="${q.placeholder}" style="min-height: 100px;"></textarea>
+                    <button class="btn btn-primary" onclick="checkCreative()" style="width: 100%; margin-top: 15px;">提交答案</button>
+                `;
+            }
+            
+            html += '</div>';
+            container.innerHTML = html;
+        }
+        
+        function handleMatching(element) {
+            if (element.classList.contains('matched')) return;
+            
+            if (!selectedItem) {
+                selectedItem = element;
+                element.classList.add('selected');
+            } else {
+                const prev = selectedItem;
+                const current = element;
+                
+                if (prev.dataset.pairId === current.dataset.pairId && 
+                    prev.dataset.type !== current.dataset.type) {
+                    prev.classList.remove('selected');
+                    prev.classList.add('matched');
+                    current.classList.add('matched');
+                    matchedPairs.push(prev.dataset.pairId);
+                    
+                    if (matchedPairs.length === questions[currentQuestion].pairs.length) {
+                        clearInterval(window.matchingInterval);
+                        islandCorrectCount++;
+                        totalScore += 100;
+                        recordAnswer(islandIndex, currentQuestion, '配對題', '全部正確', true, 100);
+                        
+                        setTimeout(() => {
+                            matchedPairs = [];
+                            selectedItem = null;
+                            nextQuestion();
+                        }, 500);
+                    }
+                } else {
+                    prev.classList.remove('selected');
+                    prev.style.animation = 'shake 0.5s';
+                    current.style.animation = 'shake 0.5s';
+                    setTimeout(() => {
+                        prev.style.animation = '';
+                        current.style.animation = '';
+                    }, 500);
+                }
+                
+                selectedItem = null;
+            }
+        }
+        
+        function endMatching(success) {
+            document.querySelectorAll('.matching-item').forEach(item => item.style.pointerEvents = 'none');
+            if (!success) {
+                recordAnswer(islandIndex, currentQuestion, '配對題', '未完成', false, 0);
+            }
+            setTimeout(() => {
+                matchedPairs = [];
+                selectedItem = null;
+                nextQuestion();
+            }, 1000);
+        }
+        
+        function checkAnswer(selectedIndex) {
+            const q = questions[currentQuestion];
+            const isCorrect = q.options[selectedIndex].correct;
+            
+            document.querySelectorAll('.option').forEach((el, i) => {
+                el.classList.add('disabled');
+                if (q.options[i].correct) el.classList.add('correct');
+                else if (i === selectedIndex) el.classList.add('wrong');
+            });
+            
+            answers.push({
+                question: q.title,
+                answer: q.options[selectedIndex].text,
+                isCorrect: isCorrect
+            });
+            
+            recordAnswer(islandIndex, currentQuestion, q.question, q.options[selectedIndex].text, isCorrect, isCorrect ? 100 : 0);
+            
+            if (isCorrect) {
+                correctCount++;
+                totalScore += 100;
+            }
+            
+            setTimeout(nextQuestion, 1500);
+        }
+        
+        function checkCreative() {
+            const answer = document.getElementById('creative-answer').value.trim();
+            const q = questions[currentQuestion];
+            
+            if (answer.length < q.minLength) {
+                alert(`請至少輸入${q.minLength}個字！`);
+                return;
+            }
+            
+            const hasKeyword = q.checkKeywords.some(kw => answer.includes(kw));
+            const isValid = hasKeyword && answer.length > q.minLength;
+            
+            answers.push({
+                question: q.title,
+                answer: answer,
+                isCorrect: isValid
+            });
+            
+            recordAnswer(islandIndex, currentQuestion, q.title, answer, isValid, isValid ? 100 : 50);
+            
+            if (isValid) {
+                correctCount++;
+                totalScore += 100;
+            } else {
+                totalScore += 50;
+            }
+            
+            nextQuestion();
+        }
+        
+        function nextQuestion() {
+            currentQuestion++;
+            if (currentQuestion < questions.length) {
+                showQuestion(currentQuestion);
+            } else {
+                finishIsland();
+            }
+        }
+        
+        function finishIsland() {
+            const required = Math.ceil(questions.length / 2);
+            const isPass = correctCount >= required;
+            
+            if (isPass) {
+                player.stamps[islandIndex] = true;
+                player.score = (player.score || 0) + totalScore;
+            }
+            savePlayer();
+            
+            const playerData = {
+                name: player.name,
+                class: player.class,
+                score: player.score,
+                stamps: player.stamps,
+                islandAttempts: player.islandAttempts,
+                lastUpdate: firebase.database.ServerValue.TIMESTAMP
+            };
+            
+            if (typeof savePlayerData === 'function') {
+                savePlayerData(playerData);
+            }
+            
+            showResult(isPass, required);
+        }
+        
+        function showResult(isPass, required) {
+            document.getElementById('question-container').style.display = 'none';
+            document.getElementById('result-container').style.display = 'block';
+            
+            const icon = document.getElementById('result-icon');
+            const title = document.getElementById('result-title');
+            const stats = document.getElementById('result-stats');
+            const buttons = document.getElementById('result-buttons');
+            
+            if (isPass) {
+                icon.textContent = '🏆';
+                title.textContent = `${islandName} 挑戰成功！`;
+                title.style.color = '#38ef7d';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>獲得積分</span><span>+${totalScore}</span></div>
+                    <div class="stat-row"><span>獲得印章</span><span>${islandIcon}</span></div>
+                `;
+                
+                // 最後一島，前往Boss
+                buttons.innerHTML = `
+                    <a href="boss.html" class="btn btn-primary">👑 挑戰最終Boss</a>
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                    <a href="leaderboard.html" class="btn btn-secondary">查看排行榜</a>
+                `;
+            } else {
+                icon.textContent = '💪';
+                title.textContent = `${islandName} 挑戰失敗`;
+                title.style.color = '#f45c43';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>目前嘗試</span><span>第 ${player.islandAttempts[islandIndex]} 次</span></div>
+                `;
+                
+                buttons.innerHTML = `
+                    <button class="btn btn-warning" onclick="retry()">🔄 重新挑戰</button>
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                `;
+            }
+        }
+        
+        function retry() {
+            currentQuestion = 0;
+            correctCount = 0;
+            totalScore = 0;
+            answers = [];
+            matchedPairs = [];
+            selectedItem = null;
+            location.reload();
+        }
+        
+        // 啟動
+        init();
+    </script>
+</body>
+</html>
