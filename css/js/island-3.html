@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>互文島 - 木蘭詩偵探</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="nav-bar">
+            <a href="index.html" class="btn btn-secondary" style="padding: 8px 15px;">← 返回地圖</a>
+            <div class="nav-title">🔀 互文島（第3/5島）</div>
+            <div id="score-display">積分：0</div>
+        </div>
+        
+        <div class="hint-box">
+            本島共3題，需答對<strong>至少2題</strong>才能過關進入下一島。
+            <span id="attempt-info" style="float: right;"></span>
+        </div>
+        
+        <!-- 題目區域 -->
+        <div id="question-container">
+            <!-- 動態載入 -->
+        </div>
+        
+        <!-- 結果區域 -->
+        <div id="result-container" style="display: none;">
+            <div class="result-box">
+                <div class="result-icon" id="result-icon">🏆</div>
+                <div class="result-title" id="result-title">挑戰完成！</div>
+                <div class="result-stats" id="result-stats"></div>
+                <div id="result-buttons"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ==================== 島嶼設定 ====================
+        const islandIndex = 2; // 2=互文島
+        const islandName = '互文島';
+        const islandIcon = '🔀';
+        
+        const questions = [
+            {
+                type: 'choice',
+                title: '互文見義',
+                question: '「東市買駿馬，西市買鞍韉，南市買轡頭，北市買長鞭」中，「東西南北」的意思是？',
+                poem: '東市買駿馬，西市買鞍韉，南市買轡頭，北市買長鞭。',
+                options: [
+                    { text: 'A. 木蘭真的跑了四個市場', correct: false },
+                    { text: 'B. 到各處市場買齊裝備（互文見義）', correct: true },
+                    { text: 'C. 形容市場很大', correct: false },
+                    { text: 'D. 純粹為了押韻', correct: false }
+                ],
+                explanation: '「互文見義」指上下句互相補充，實際是到各處買齊裝備，非單一市場。'
+            },
+            {
+                type: 'choice',
+                title: '鋪陳排比',
+                question: '這四句運用了什麼手法？',
+                options: [
+                    { text: 'A. 對比', correct: false },
+                    { text: 'B. 排比鋪陳（四句結構相似）', correct: false },
+                    { text: 'C. 互文見義（互相補充）', correct: false },
+                    { text: 'D. B和C都正確', correct: true }
+                ],
+                explanation: '排比強化氣勢，互文完善語義，共同表現木蘭準備的忙碌與周全。'
+            },
+            {
+                type: 'creative',
+                title: '互文創作',
+                question: '請用「東西南北」的互文手法，描述木蘭歸家後家人準備的情景。',
+                hint: '提示：並非真在四個地方，而是到各處準備，互相補充意思。',
+                placeholder: '例如：東廂備酒漿，西廂備衣裳，南廂備糕點，北廂備牛羊...',
+                checkKeywords: ['東', '西', '南', '北', '備', '理', '整', '設'],
+                minLength: 10,
+                explanation: '互文見義讓語言簡潔而意蘊豐富，是樂府詩的精妙之處。'
+            }
+        ];
+        
+        // ==================== 遊戲狀態 ====================
+        let player = null;
+        let currentQuestion = 0;
+        let correctCount = 0;
+        let totalScore = 0;
+        let answers = [];
+        
+        // ==================== 初始化 ====================
+        function init() {
+            const playerData = localStorage.getItem('mulanPlayer');
+            if (!playerData) {
+                alert('請先登入！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            player = JSON.parse(playerData);
+            
+            if (player.stamps[islandIndex]) {
+                alert('你已經完成這個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            if (islandIndex > 0 && !player.stamps[islandIndex - 1]) {
+                alert('請先完成前一個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            player.islandAttempts[islandIndex] = (player.islandAttempts[islandIndex] || 0) + 1;
+            savePlayer();
+            
+            document.getElementById('score-display').textContent = `積分：${player.score || 0}`;
+            document.getElementById('attempt-info').textContent = `第 ${player.islandAttempts[islandIndex]} 次嘗試`;
+            
+            showQuestion(0);
+        }
+        
+        function savePlayer() {
+            localStorage.setItem('mulanPlayer', JSON.stringify(player));
+        }
+        
+        // ==================== 顯示題目 ====================
+        function showQuestion(index) {
+            const q = questions[index];
+            const container = document.getElementById('question-container');
+            
+            let html = `
+                <div class="question-box">
+                    <div class="question-number">題目 ${index + 1} / ${questions.length}</div>
+                    <h3>${q.title}</h3>
+                    <div class="question-text">${q.question}</div>
+            `;
+            
+            if (q.poem) {
+                html += `<div class="poem-text">${q.poem.replace(/\n/g, '<br>')}</div>`;
+            }
+            
+            if (q.type === 'choice') {
+                html += '<div class="options">';
+                q.options.forEach((opt, i) => {
+                    html += `<div class="option" onclick="checkAnswer(${i})" id="opt-${i}">${opt.text}</div>`;
+                });
+                html += '</div>';
+            } else if (q.type === 'creative') {
+                html += `
+                    <div class="hint-box">${q.hint}</div>
+                    <textarea class="input-field textarea-field" id="creative-answer" placeholder="${q.placeholder}" style="min-height: 100px;"></textarea>
+                    <button class="btn btn-primary" onclick="checkCreative()" style="width: 100%; margin-top: 15px;">提交答案</button>
+                `;
+            }
+            
+            html += '</div>';
+            container.innerHTML = html;
+        }
+        
+        function checkAnswer(selectedIndex) {
+            const q = questions[currentQuestion];
+            const isCorrect = q.options[selectedIndex].correct;
+            
+            document.querySelectorAll('.option').forEach((el, i) => {
+                el.classList.add('disabled');
+                if (q.options[i].correct) el.classList.add('correct');
+                else if (i === selectedIndex) el.classList.add('wrong');
+            });
+            
+            answers.push({
+                question: q.title,
+                answer: q.options[selectedIndex].text,
+                isCorrect: isCorrect
+            });
+            
+            recordAnswer(islandIndex, currentQuestion, q.question, q.options[selectedIndex].text, isCorrect, isCorrect ? 100 : 0);
+            
+            if (isCorrect) {
+                correctCount++;
+                totalScore += 100;
+            }
+            
+            setTimeout(nextQuestion, 1500);
+        }
+        
+        function checkCreative() {
+            const answer = document.getElementById('creative-answer').value.trim();
+            const q = questions[currentQuestion];
+            
+            if (answer.length < q.minLength) {
+                alert(`請至少輸入${q.minLength}個字！`);
+                return;
+            }
+            
+            const hasKeyword = q.checkKeywords.some(kw => answer.includes(kw));
+            const isValid = hasKeyword && answer.length > q.minLength;
+            
+            answers.push({
+                question: q.title,
+                answer: answer,
+                isCorrect: isValid
+            });
+            
+            recordAnswer(islandIndex, currentQuestion, q.title, answer, isValid, isValid ? 100 : 50);
+            
+            if (isValid) {
+                correctCount++;
+                totalScore += 100;
+            } else {
+                totalScore += 50;
+            }
+            
+            nextQuestion();
+        }
+        
+        function nextQuestion() {
+            currentQuestion++;
+            if (currentQuestion < questions.length) {
+                showQuestion(currentQuestion);
+            } else {
+                finishIsland();
+            }
+        }
+        
+        function finishIsland() {
+            const required = Math.ceil(questions.length / 2);
+            const isPass = correctCount >= required;
+            
+            if (isPass) {
+                player.stamps[islandIndex] = true;
+                player.score = (player.score || 0) + totalScore;
+            }
+            savePlayer();
+            
+            const playerData = {
+                name: player.name,
+                class: player.class,
+                score: player.score,
+                stamps: player.stamps,
+                islandAttempts: player.islandAttempts,
+                lastUpdate: firebase.database.ServerValue.TIMESTAMP
+            };
+            
+            if (typeof savePlayerData === 'function') {
+                savePlayerData(playerData);
+            }
+            
+            showResult(isPass, required);
+        }
+        
+        function showResult(isPass, required) {
+            document.getElementById('question-container').style.display = 'none';
+            document.getElementById('result-container').style.display = 'block';
+            
+            const icon = document.getElementById('result-icon');
+            const title = document.getElementById('result-title');
+            const stats = document.getElementById('result-stats');
+            const buttons = document.getElementById('result-buttons');
+            
+            if (isPass) {
+                icon.textContent = '🏆';
+                title.textContent = `${islandName} 挑戰成功！`;
+                title.style.color = '#38ef7d';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>獲得積分</span><span>+${totalScore}</span></div>
+                    <div class="stat-row"><span>獲得印章</span><span>${islandIcon}</span></div>
+                `;
+                
+                buttons.innerHTML = `
+                    <a href="island-4.html" class="btn btn-primary">前往下一島 →</a>
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                    <a href="leaderboard.html" class="btn btn-secondary">查看排行榜</a>
+                `;
+            } else {
+                icon.textContent = '💪';
+                title.textContent = `${islandName} 挑戰失敗`;
+                title.style.color = '#f45c43';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>目前嘗試</span><span>第 ${player.islandAttempts[islandIndex]} 次</span></div>
+                `;
+                
+                buttons.innerHTML = `
+                    <button class="btn btn-warning" onclick="retry()">🔄 重新挑戰</button>
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                `;
+            }
+        }
+        
+        function retry() {
+            currentQuestion = 0;
+            correctCount = 0;
+            totalScore = 0;
+            answers = [];
+            location.reload();
+        }
+        
+        // 啟動
+        init();
+    </script>
+</body>
+</html>
