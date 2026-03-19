@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>詳略島 - 木蘭詩偵探</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="nav-bar">
+            <a href="index.html" class="btn btn-secondary" style="padding: 8px 15px;">← 返回地圖</a>
+            <div class="nav-title">⚖️ 詳略島（第4/5島）</div>
+            <div id="score-display">積分：0</div>
+        </div>
+        
+        <div class="hint-box">
+            本島共3題，需答對<strong>至少2題</strong>才能過關進入下一島。
+            <span id="attempt-info" style="float: right;"></span>
+        </div>
+        
+        <!-- 題目區域 -->
+        <div id="question-container">
+            <!-- 動態載入 -->
+        </div>
+        
+        <!-- 結果區域 -->
+        <div id="result-container" style="display: none;">
+            <div class="result-box">
+                <div class="result-icon" id="result-icon">🏆</div>
+                <div class="result-title" id="result-title">挑戰完成！</div>
+                <div class="result-stats" id="result-stats"></div>
+                <div id="result-buttons"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ==================== 島嶼設定 ====================
+        const islandIndex = 3; // 3=詳略島
+        const islandName = '詳略島';
+        const islandIcon = '⚖️';
+        
+        const questions = [
+            {
+                type: 'choice',
+                title: '詳略對比',
+                question: '比較以下兩段，為何征戰簡略而歸家詳細？\n\n征戰：「萬里赴戎機...將軍百戰死，壯士十年歸」（6句寫十年）\n歸家：「爺孃聞女來...磨刀霍霍向豬羊」（6句寫一瞬間）',
+                options: [
+                    { text: 'A. 突出主題：孝親與和平生活，而非戰爭本身', correct: true },
+                    { text: 'B. 作者不會寫戰爭場面', correct: false },
+                    { text: 'C. 征戰過程不重要', correct: false },
+                    { text: 'D. 為了節省紙張', correct: false }
+                ],
+                explanation: '樂府詩重視表現親情與和平，戰爭只是背景，此為「詳略得當」。'
+            },
+            {
+                type: 'choice',
+                title: '敘事特點',
+                question: '這種「詳略得當」的敘事方式，體現了樂府詩的什麼特點？',
+                options: [
+                    { text: 'A. 字數限制嚴格', correct: false },
+                    { text: 'B. 敘事性強，能按主題需要安排詳略', correct: true },
+                    { text: 'C. 只會寫家庭場景', correct: false },
+                    { text: 'D. 作者偷懶', correct: false }
+                ],
+                explanation: '樂府詩繼承《詩經》傳統，善於剪裁素材，突出核心主題。'
+            },
+            {
+                type: 'choice',
+                title: '主題理解',
+                question: '《木蘭詩》的核心主題是什麼？',
+                options: [
+                    { text: 'A. 歌頌戰爭英雄', correct: false },
+                    { text: 'B. 表現孝道與和平生活的可貴', correct: true },
+                    { text: 'C. 描寫軍旅生活', correct: false },
+                    { text: 'D. 批評封建社會', correct: false }
+                ],
+                explanation: '詩中詳寫歸家親情，略寫戰爭殺戮，體現反戰與重孝的思想。'
+            }
+        ];
+        
+        // ==================== 遊戲狀態 ====================
+        let player = null;
+        let currentQuestion = 0;
+        let correctCount = 0;
+        let totalScore = 0;
+        let answers = [];
+        
+        // ==================== 初始化 ====================
+        function init() {
+            const playerData = localStorage.getItem('mulanPlayer');
+            if (!playerData) {
+                alert('請先登入！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            player = JSON.parse(playerData);
+            
+            if (player.stamps[islandIndex]) {
+                alert('你已經完成這個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            if (islandIndex > 0 && !player.stamps[islandIndex - 1]) {
+                alert('請先完成前一個島嶼！');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            player.islandAttempts[islandIndex] = (player.islandAttempts[islandIndex] || 0) + 1;
+            savePlayer();
+            
+            document.getElementById('score-display').textContent = `積分：${player.score || 0}`;
+            document.getElementById('attempt-info').textContent = `第 ${player.islandAttempts[islandIndex]} 次嘗試`;
+            
+            showQuestion(0);
+        }
+        
+        function savePlayer() {
+            localStorage.setItem('mulanPlayer', JSON.stringify(player));
+        }
+        
+        // ==================== 顯示題目 ====================
+        function showQuestion(index) {
+            const q = questions[index];
+            const container = document.getElementById('question-container');
+            
+            let html = `
+                <div class="question-box">
+                    <div class="question-number">題目 ${index + 1} / ${questions.length}</div>
+                    <h3>${q.title}</h3>
+                    <div class="question-text">${q.question}</div>
+            `;
+            
+            if (q.poem) {
+                html += `<div class="poem-text">${q.poem.replace(/\n/g, '<br>')}</div>`;
+            }
+            
+            html += '<div class="options">';
+            q.options.forEach((opt, i) => {
+                html += `<div class="option" onclick="checkAnswer(${i})" id="opt-${i}">${opt.text}</div>`;
+            });
+            html += '</div></div>';
+            
+            container.innerHTML = html;
+        }
+        
+        function checkAnswer(selectedIndex) {
+            const q = questions[currentQuestion];
+            const isCorrect = q.options[selectedIndex].correct;
+            
+            document.querySelectorAll('.option').forEach((el, i) => {
+                el.classList.add('disabled');
+                if (q.options[i].correct) el.classList.add('correct');
+                else if (i === selectedIndex) el.classList.add('wrong');
+            });
+            
+            answers.push({
+                question: q.title,
+                answer: q.options[selectedIndex].text,
+                isCorrect: isCorrect
+            });
+            
+            recordAnswer(islandIndex, currentQuestion, q.question, q.options[selectedIndex].text, isCorrect, isCorrect ? 100 : 0);
+            
+            if (isCorrect) {
+                correctCount++;
+                totalScore += 100;
+            }
+            
+            setTimeout(nextQuestion, 1500);
+        }
+        
+        function nextQuestion() {
+            currentQuestion++;
+            if (currentQuestion < questions.length) {
+                showQuestion(currentQuestion);
+            } else {
+                finishIsland();
+            }
+        }
+        
+        function finishIsland() {
+            const required = Math.ceil(questions.length / 2);
+            const isPass = correctCount >= required;
+            
+            if (isPass) {
+                player.stamps[islandIndex] = true;
+                player.score = (player.score || 0) + totalScore;
+            }
+            savePlayer();
+            
+            const playerData = {
+                name: player.name,
+                class: player.class,
+                score: player.score,
+                stamps: player.stamps,
+                islandAttempts: player.islandAttempts,
+                lastUpdate: firebase.database.ServerValue.TIMESTAMP
+            };
+            
+            if (typeof savePlayerData === 'function') {
+                savePlayerData(playerData);
+            }
+            
+            showResult(isPass, required);
+        }
+        
+        function showResult(isPass, required) {
+            document.getElementById('question-container').style.display = 'none';
+            document.getElementById('result-container').style.display = 'block';
+            
+            const icon = document.getElementById('result-icon');
+            const title = document.getElementById('result-title');
+            const stats = document.getElementById('result-stats');
+            const buttons = document.getElementById('result-buttons');
+            
+            if (isPass) {
+                icon.textContent = '🏆';
+                title.textContent = `${islandName} 挑戰成功！`;
+                title.style.color = '#38ef7d';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>獲得積分</span><span>+${totalScore}</span></div>
+                    <div class="stat-row"><span>獲得印章</span><span>${islandIcon}</span></div>
+                `;
+                
+                buttons.innerHTML = `
+                    <a href="island-5.html" class="btn btn-primary">前往下一島 →</a>
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                    <a href="leaderboard.html" class="btn btn-secondary">查看排行榜</a>
+                `;
+            } else {
+                icon.textContent = '💪';
+                title.textContent = `${islandName} 挑戰失敗`;
+                title.style.color = '#f45c43';
+                
+                stats.innerHTML = `
+                    <div class="stat-row"><span>答對題數</span><span>${correctCount}/${questions.length}</span></div>
+                    <div class="stat-row"><span>需要答對</span><span>${required}題</span></div>
+                    <div class="stat-row"><span>目前嘗試</span><span>第 ${player.islandAttempts[islandIndex]} 次</span></div>
+                `;
+                
+                buttons.innerHTML = `
+                    <button class="btn btn-warning" onclick="retry()">🔄 重新挑戰</button>
+                    <a href="index.html" class="btn btn-secondary">返回地圖</a>
+                `;
+            }
+        }
+        
+        function retry() {
+            currentQuestion = 0;
+            correctCount = 0;
+            totalScore = 0;
+            answers = [];
+            location.reload();
+        }
+        
+        // 啟動
+        init();
+    </script>
+</body>
+</html>
