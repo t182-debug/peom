@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教師監控 - 木蘭詩偵探</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        body { background: #1a1a2e; }
+        .teacher-panel { background: rgba(0,0,0,0.3); border-radius: 15px; padding: 20px; margin: 15px 0; }
+        .filter-bar { display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; }
+        .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; }
+        .stat-box { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; text-align: center; }
+        .stat-number { font-size: 2em; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        th { background: rgba(255,255,255,0.1); }
+        .correct { color: #38ef7d; }
+        .wrong { color: #f45c43; }
+        .progress-bar-mini { height: 20px; background: rgba(255,255,255,0.2); border-radius: 10px; overflow: hidden; }
+        .progress-fill-mini { height: 100%; background: linear-gradient(90deg, #f093fb, #f5576c); }
+    </style>
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <script src="js/firebase-config.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1 style="text-align: center; margin-bottom: 20px;">🕵️ 教師監控儀表板</h1>
+        
+        <div class="stat-grid">
+            <div class="stat-box">
+                <div class="stat-number" id="total-students">0</div>
+                <div>總參與人數</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="online-now">0</div>
+                <div>目前在線</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="completed-all">0</div>
+                <div>完成全島</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="avg-score">0</div>
+                <div>平均積分</div>
+            </div>
+        </div>
+        
+        <div class="teacher-panel">
+            <div class="filter-bar">
+                <input type="text" id="filter-class" class="input-field" placeholder="篩選班別（如：1A）" style="max-width: 150px;">
+                <input type="text" id="filter-name" class="input-field" placeholder="搜尋姓名" style="max-width: 150px;">
+                <button class="btn btn-primary" onclick="applyFilter()">篩選</button>
+                <button class="btn btn-secondary" onclick="exportData()">📥 匯出CSV</button>
+            </div>
+            
+            <h3>學生進度一覽</h3>
+            <div style="overflow-x: auto;">
+                <table id="students-table">
+                    <thead>
+                        <tr>
+                            <th>排名</th>
+                            <th>班別</th>
+                            <th>姓名</th>
+                            <th>積分</th>
+                            <th>進度</th>
+                            <th>嘗試次數</th>
+                            <th>狀態</th>
+                        </tr>
+                    </thead>
+                    <tbody id="students-tbody">
+                        <!-- 動態填入 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="teacher-panel">
+            <h3>📝 即時答題記錄（最近50筆）</h3>
+            <div id="answers-list" style="max-height: 400px; overflow-y: auto;">
+                <!-- 動態填入 -->
+            </div>
+        </div>
+        
+        <div style="text-align: center; margin-top: 20px;">
+            <button class="btn btn-secondary" onclick="location.reload()">🔄 重新整理</button>
+        </div>
+    </div>
+    
+    <script>
+        let allStudents = {};
+        let allAnswers = {};
+        
+        function loadData() {
+            // 監聽學生資料
+            database.ref('students').on('value', (snapshot) => {
+                allStudents = snapshot.val() || {};
+                updateDashboard();
+            });
+            
+            // 監聽答案（最近100筆）
+            database.ref('answers').orderByChild('timestamp').limitToLast(50).on('value', (snapshot) => {
+                allAnswers = snapshot.val() || {};
+                updateAnswersList();
+            });
+        }
+        
+        function updateDashboard() {
+            const now = Date.now();
+            const students = Object.values(allStudents);
+            
+            // 統計
+            document.getElementById('total-students').textContent = students.length;
+            document.getElementById('online-now').textContent = students.filter(s => now - (s.lastUpdate || 0) < 60000).length;
+            document.getElementById('completed-all').textContent = students.filter(s => (s.stamps || []).every(x => x)).length;
+            document.getElementById('avg-score').textContent = students.length ? Math.round(students.reduce((a, s) => a + (s.score || 0), 0) / students.length) : 0;
+            
+            // 渲染表格
+            renderTable(students);
+        }
+        
+        function renderTable(students) {
+            const filterClass = document.getElementById('filter-class').value.trim();
+            const filterName = document.getElementById('filter-name').value.trim();
+            
+            let filtered = students.filter(s => {
+                if (filterClass && !s.class.includes(filterClass)) return false;
+                if (filterName && !s.name.includes(filterName)) return false;
+                return true;
+            });
+            
+            // 排序
+            filtered.sort((a, b) => (b.score || 0) - (a.score || 0));
+            
+            const tbody = document.getElementById('students-tbody');
+            let html = '';
+            
+            filtered.forEach((s, i) => {
+                const stamps = s.stamps || [false, false, false, false, false];
+                const attempts = s.islandAttempts || [0, 0, 0, 0, 0];
+                const totalAttempts = attempts.reduce((a, b) => a + b, 0);
+                const progress = Math.round(stamps.filter(x => x).length / 5 * 100);
+                const isOnline = Date.now() - (s.lastUpdate || 0) < 60000;
+                
+                html += `
+                    <tr>
+                        <td>${i + 1}</td>
+                        <td>${s.class}</td>
+                        <td>${s.name} ${isOnline ? '🟢' : ''}</td>
+                        <td><strong>${s.score || 0}</strong></td>
+                        <td>
+                            <div class="progress-bar-mini" style="width: 100px;">
+                                <div class="progress-fill-mini" style="width: ${progress}%"></div>
+                            </div>
+                            ${progress}%
+                        </td>
+                        <td>${totalAttempts}</td>
+                        <td>${stamps.every(x => x) ? '✅ 完成' : stamps.some(x => x) ? '🎯 進行中' : '🆕 未開始'}</td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = html || '<tr><td colspan="7" style="text-align: center;">無符合資料</td></tr>';
+        }
+        
+        function updateAnswersList() {
+            const list = Object.values(allAnswers).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, 50);
+            const container = document.getElementById('answers-list');
+            
+            let html = '';
+            list.forEach(a => {
+                const time = a.timestamp ? new Date(a.timestamp).toLocaleTimeString('zh-HK') : '-';
+                const correctClass = a.isCorrect ? 'correct' : 'wrong';
+                const correctIcon = a.isCorrect ? '✅' : '❌';
+                
+                html += `
+                    <div class="answer-item ${correctClass}">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span><strong>${a.name}</strong> (${a.class})</span>
+                            <span style="opacity: 0.7;">${time}</span>
+                        </div>
+                        <div>島嶼${a.island + 1} 題目${a.level + 1}: ${correctIcon} ${a.isCorrect ? '正確' : '錯誤'} ${a.score ? '+' + a.score : ''}分</div>
+                        <div style="font-size: 0.9em; opacity: 0.8; margin-top: 5px;">答案: ${a.answer.substring(0, 50)}${a.answer.length > 50 ? '...' : ''}</div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html || '<p style="opacity: 0.7;">暫無答題記錄</p>';
+        }
+        
+        function applyFilter() {
+            updateDashboard();
+        }
+        
+        function exportData() {
+            const students = Object.values(allStudents);
+            let csv = '班別,姓名,積分,完成島嶼數,韻律島,復沓島,互文島,詳略島,對偶島,嘗試次數\n';
+            
+            students.forEach(s => {
+                const stamps = s.stamps || [false, false, false, false, false];
+                const attempts = s.islandAttempts || [0, 0, 0, 0, 0];
+                csv += `${s.class},${s.name},${s.score || 0},${stamps.filter(x => x).length},${stamps[0] ? '✓' : ''},${stamps[1] ? '✓' : ''},${stamps[2] ? '✓' : ''},${stamps[3] ? '✓' : ''},${stamps[4] ? '✓' : ''},${attempts.reduce((a, b) => a + b, 0)}\n`;
+            });
+            
+            const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `mulan-detective-${new Date().toISOString().slice(0, 10)}.csv`;
+            link.click();
+        }
+        
+        // 載入
+        loadData();
+    </script>
+</body>
+</html>
